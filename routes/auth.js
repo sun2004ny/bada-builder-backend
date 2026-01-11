@@ -34,15 +34,27 @@ router.post(
       // Hash password
       const hashedPassword = await bcrypt.hash(password, 10);
 
-      // Create user
+      // Create user - Save ALL data to PostgreSQL
       const result = await pool.query(
-        `INSERT INTO users (email, password, name, phone, user_type) 
-         VALUES ($1, $2, $3, $4, $5) 
-         RETURNING id, email, name, phone, user_type, created_at`,
+        `INSERT INTO users (email, password, name, phone, user_type, created_at, updated_at) 
+         VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) 
+         RETURNING id, email, name, phone, user_type, profile_photo, is_subscribed, 
+                   subscription_expiry, subscription_plan, subscription_price, 
+                   subscribed_at, created_at, updated_at`,
         [email, hashedPassword, name, phone || null, userType || 'individual']
       );
 
       const user = result.rows[0];
+
+      // Log successful registration to database
+      console.log('✅ User registered and saved to PostgreSQL:', {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        phone: user.phone,
+        user_type: user.user_type,
+        created_at: user.created_at
+      });
 
       // Send welcome email (non-blocking)
       sendWelcomeEmail(email, name).catch(err => console.error('Welcome email failed:', err));
@@ -53,12 +65,37 @@ router.post(
           id: user.id,
           email: user.email,
           name: user.name,
+          phone: user.phone,
           userType: user.user_type,
+          profilePhoto: user.profile_photo,
+          isSubscribed: user.is_subscribed,
+          subscriptionExpiry: user.subscription_expiry,
+          subscriptionPlan: user.subscription_plan,
+          createdAt: user.created_at,
         },
       });
     } catch (error) {
-      console.error('Registration error:', error);
-      res.status(500).json({ error: 'Registration failed' });
+      console.error('❌ Registration error:', error);
+      console.error('Error details:', {
+        message: error.message,
+        code: error.code,
+        detail: error.detail
+      });
+      
+      // Provide more specific error messages
+      let errorMessage = 'Registration failed';
+      if (error.code === '23505') { // Unique constraint violation
+        errorMessage = 'Email already exists';
+      } else if (error.code === '23502') { // Not null violation
+        errorMessage = 'Required fields are missing';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      res.status(500).json({ 
+        error: errorMessage,
+        ...(process.env.NODE_ENV === 'development' && { details: error.message })
+      });
     }
   }
 );
